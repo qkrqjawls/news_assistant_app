@@ -1,59 +1,55 @@
-from flask import Flask, jsonify, request
-from google.cloud import storage
-import json
+import os
+import datetime
+import mysql.connector
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-BUCKET_NAME = "news_assistant_main"
+# 환경변수로부터 설정 읽기 (Cloud Run 배포 시 환경변수로 세팅)
+DB_USER     = os.environ.get("DB_USER", "appuser")
+DB_PASS     = os.environ.get("DB_PASS", "secure_app_password")
+DB_NAME     = os.environ.get("DB_NAME", "myappdb")
+DB_SOCKET   = os.environ.get("DB_SOCKET")   # ex) "/cloudsql/project:region:instance"
 
-@app.route('/read-message', methods=['GET'])
-def read_gcs_json():
+import sys
+import traceback
+
+def get_db_connection():
     try:
-        # GCS 클라이언트
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
-        blob = bucket.blob("testdata.json")
+        if DB_SOCKET:
+            return mysql.connector.connect(
+                user=DB_USER,
+                password=DB_PASS,
+                database=DB_NAME,
+                unix_socket=DB_SOCKET,
+            )
+        else:
+            return mysql.connector.connect(
+                user=DB_USER,
+                password=DB_PASS,
+                database=DB_NAME,
+                host="127.0.0.1",
+                port=3306
+            )
+    except mysql.connector.Error as err:
+        print("(!) DB 연결 실패", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        raise
 
-        # JSON 데이터 읽기
-        content = blob.download_as_text()
-        data = json.loads(content)
-
-        # my_message 키 반환
-        message = data.get("my_message", "Key 'my_message' not found")
-        return jsonify({"my_message": message})
-    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/write-test', methods=['POST'])
-def write_gcs_json():
+@app.route("/test-db")
+def test_db():
     try:
-        req_data = request.get_json(force=True)
-        message = req_data.get("my_message")
-
-        # 작성할 데이터
-        payload = {
-            "status": "success",
-            "my_message" : message
-        }
-
-        # GCS 클라이언트
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
-        blob = bucket.blob("output.json")
-
-        # JSON 문자열로 변환해서 업로드
-        blob.upload_from_string(
-            data=json.dumps(payload),
-            content_type='application/json'
-        )
-
-        return jsonify({"message": f"'output.json' written to GCS bucket '{BUCKET_NAME}'"})
-    
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT NOW()")
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return jsonify({"db_time": str(result[0])})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    
 @app.route('/')
 def home():
-    return "GCS JSON Reader is running!"
+    return "Secured API server is running!"
