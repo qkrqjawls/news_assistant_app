@@ -12,14 +12,14 @@ def compute_embeddings(items, model_name="paraphrase-multilingual-MiniLM-L12-v2"
     - items: JSON dict 리스트 (각 dict에 'title'과 'body' 필드가 있다고 가정)
     - model_name: HuggingFace 문장 임베딩 모델 이름
     반환:
-      embeddings (N×d numpy array)
+      embeddings (Nxd numpy array)
     """
     model = SentenceTransformer(model_name)
     texts = [preprocess_text(x.get("title", ""), x.get("body", "")) for x in items]
     embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=True)
     return embeddings
 
-def cluster_and_save(input_folder: str, output_path: str, dist_thresh=0.6):
+def cluster_and_save(items : list, output_path: str, dist_thresh=0.6):
     """
     1) newsdata/ 폴더에서 모든 .json 파일 로드
     2) compute_embeddings()로 임베딩 계산
@@ -29,7 +29,7 @@ def cluster_and_save(input_folder: str, output_path: str, dist_thresh=0.6):
     5) clustered.json 형식으로 output_path 에 저장
     """
     # 1) JSON 로드
-    items = load_all_json_from_folder(input_folder)
+    # items = load_all_json_from_folder(input_folder)
 
     # 2) 임베딩 계산
     embeddings = compute_embeddings(items)
