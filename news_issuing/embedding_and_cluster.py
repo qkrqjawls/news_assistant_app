@@ -31,11 +31,8 @@ def cluster_items(items: list, dist_thresh=0.6) -> list:
     labels = clustering.fit_predict(embeddings)
 
     # 3) 결과 매핑
-    results = []
+    results = [[] for i in range(max(labels)+1)]
     for item, lbl in zip(items, labels):
-        results.append({
-            "article_id": item["article_id"],
-            "cluster_id": int(lbl)
-        })
+        results[int(lbl)].append(item)
 
     return results
