@@ -2,3 +2,5 @@ flask
 gunicorn
 google-cloud-storage
 mysql-connector-python
+sentence-transformers
+scikit-learn

@@ -11,6 +11,7 @@ DB_PASS     = os.environ.get("DB_PASS", "secure_app_password")
 DB_NAME     = os.environ.get("DB_NAME", "myappdb")
 DB_SOCKET   = os.environ.get("DB_SOCKET")   # ex) "/cloudsql/project:region:instance"
 
+
 import sys
 import traceback
 
@@ -50,6 +51,63 @@ def test_db():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
     
+from . import get_news
+
+@app.route('/save-news', methods=['POST'])
+def save_news_to_db():
+    """
+    JSON body: { "X-Trigger-Time": "...",}
+    """
+    called_utc_str = request.headers.get("X-Trigger-Time")
+    called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
+
+    data = get_news.fetch_recent_kr_news(minutes=30, now_utc=called_utc)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    for article in data:
+        try:
+            cursor.execute("""
+                INSERT IGNORE INTO news_articles (
+                    article_id, title, link, creator, description, content,
+                    pub_date, pub_date_tz, image_url, video_url,
+                    source_id, source_name, source_priority,
+                    source_url, source_icon, language,
+                    country, category, duplicate
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                article["article_id"],
+                article.get("title"),
+                article.get("link"),
+                get_news.serialize(article.get("creator")),
+                article.get("description"),
+                article.get("content"),
+                get_news.parse_datetime(article.get("pubDate")),
+                article.get("pubDateTZ"),
+                article.get("image_url"),
+                article.get("video_url"),
+                article.get("source_id"),
+                article.get("source_name"),
+                article.get("source_priority"),
+                article.get("source_url"),
+                article.get("source_icon"),
+                article.get("language"),
+                get_news.serialize(article.get("country")),
+                get_news.serialize(article.get("category")),
+                article.get("duplicate"),
+            ))
+            conn.commit()
+            print(f"(✓) Inserted article_id={article['article_id']}")
+        except Exception as e:
+            print("(!) Insert failed:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+    
+    cursor.close()
+    conn.close()
+    return
+
+
 @app.route('/')
 def home():
     return "Secured API server is running!"

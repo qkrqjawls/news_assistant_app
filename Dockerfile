@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12
 
 # 1. 보안 목적의 사용자 생성
 RUN adduser --no-create-home --disabled-login appuser
