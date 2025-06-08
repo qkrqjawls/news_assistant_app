@@ -1,6 +1,6 @@
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
-from utils import preprocess_text
+from news_issuing.utils import preprocess_text
 
 def compute_embeddings(items, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
     """

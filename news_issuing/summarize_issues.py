@@ -2,7 +2,7 @@
 
 import json
 from collections import defaultdict
-from utils import summarize_with_openai
+from news_issuing.utils import summarize_with_openai
 
 def load_clustered(path: str):
     return json.load(open(path, "r", encoding="utf-8"))
