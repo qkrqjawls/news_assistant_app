@@ -1,5 +1,3 @@
-# embedding_and_cluster.py
-
 import os
 import json
 from sentence_transformers import SentenceTransformer
@@ -19,17 +17,17 @@ def compute_embeddings(items, model_name="paraphrase-multilingual-MiniLM-L12-v2"
     embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=True)
     return embeddings
 
-def cluster_and_save(items : list, output_path: str, dist_thresh=0.6):
+def cluster_and_save(input_folder: str, output_path: str, dist_thresh=0.6):
     """
     1) newsdata/ 폴더에서 모든 .json 파일 로드
     2) compute_embeddings()로 임베딩 계산
-    3) AgglomerativeClustering(거리 기반 계층적 군집화) 수행
+    3) AgglomerativeClustering 수행
        - metric="cosine", linkage="average", distance_threshold=dist_thresh
-    4) 각 기사 dict에 cluster_id 필드 추가
-    5) clustered.json 형식으로 output_path 에 저장
+    4) 각 기사 id와 cluster_id만 포함한 결과 리스트 생성
+    5) 결과를 JSON으로 output_path에 저장
     """
     # 1) JSON 로드
-    # items = load_all_json_from_folder(input_folder)
+    items = load_all_json_from_folder(input_folder)
 
     # 2) 임베딩 계산
     embeddings = compute_embeddings(items)
@@ -37,30 +35,30 @@ def cluster_and_save(items : list, output_path: str, dist_thresh=0.6):
     # 3) 계층적 클러스터링
     clustering = AgglomerativeClustering(
         n_clusters=None,
-        metric="cosine",          # scikit-learn 최신판에서 affinity → metric 으로 변경
+        metric="cosine",
         linkage="average",
         distance_threshold=dist_thresh
     )
     labels = clustering.fit_predict(embeddings)
 
-    # 4) 결과에 cluster_id 추가
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    clustered = []
+    # 4) 결과 리스트 생성
+    results = []
     for item, lbl in zip(items, labels):
-        item["cluster_id"] = int(lbl)
-        clustered.append(item)
+        article_id = item.get("id")
+        results.append({"id": article_id, "cluster_id": int(lbl)})
 
-    # 5) clustered.json 저장
+    # 5) JSON 저장
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(clustered, f, ensure_ascii=False, indent=2)
+        json.dump(results, f, ensure_ascii=False, indent=2)
 
-    print(f"▶ 클러스터링 완료: '{output_path}' 생성 (distance_threshold={dist_thresh})")
+    print(f"▶ 클러스터링 완료: '{output_path}' 생성 ({len(results)}개 항목, distance_threshold={dist_thresh})")
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="뉴스 JSON을 임베딩 후 클러스터링하여 clustered.json으로 저장"
+        description="뉴스 JSON을 임베딩 후 클러스터링하여 id-클러스터 매핑 JSON으로 저장"
     )
     parser.add_argument(
         "--input_folder",
