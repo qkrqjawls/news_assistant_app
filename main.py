@@ -53,16 +53,10 @@ def test_db():
     
 from get_news import fetch_recent_kr_news, serialize, parse_datetime
 
-@app.route('/save-news', methods=['POST'])
+@app.route('/save-news', methods=['GET'])
 def save_news_to_db():
     
-    # if not called_utc_str:
     called_utc = datetime.now(timezone.utc)
-    # else:
-    #     try:
-    #         called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
-    #     except Exception as e:
-    #         return jsonify({"error": f"Invalid datetime format: {called_utc_str}"}), 400
 
     data = fetch_recent_kr_news(minutes=30+15, now_utc=called_utc)
 
