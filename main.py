@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import mysql.connector
 from flask import Flask, request, jsonify
 
@@ -59,10 +59,13 @@ def save_news_to_db():
     JSON headers: { "X-Trigger-Time": "...",}
     """
     called_utc_str = request.headers.get("X-Trigger-Time")
-    try:
-        called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
-    except Exception as e:
-        return jsonify({"error": f"Invalid datetime format: {called_utc_str}"}), 400
+    if not called_utc_str:
+        called_utc = datetime.now(timezone.utc)
+    else:
+        try:
+            called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
+        except Exception as e:
+            return jsonify({"error": f"Invalid datetime format: {called_utc_str}"}), 400
 
     data = fetch_recent_kr_news(minutes=30+15, now_utc=called_utc)
 
