@@ -104,9 +104,13 @@ def save_news_to_db():
     conn.close()
     return jsonify({"status": "success"}), 200
 
-@app.route('save_issues', method=['POST'])
+@app.route('/save_issues', methods=['POST'])
 def save_issues_to_db():
-    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.close()
+    conn.close()
     return jsonify({"status": "success"}), 200
 
 @app.route('/')
