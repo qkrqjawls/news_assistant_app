@@ -2,5 +2,10 @@ flask
 gunicorn
 google-cloud-storage
 mysql-connector-python
-sentence-transformers
+sentence-transformers>=2.2.2
+torch>=2.0
+transformers>=4.30
 scikit-learn
+scipy
+numpy
+sentencepiece
