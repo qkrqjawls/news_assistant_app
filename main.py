@@ -51,7 +51,7 @@ def test_db():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
     
-from . import get_news
+from get_news import fetch_recent_kr_news, serialize, parse_datetime
 
 @app.route('/save-news', methods=['POST'])
 def save_news_to_db():
@@ -61,7 +61,7 @@ def save_news_to_db():
     called_utc_str = request.headers.get("X-Trigger-Time")
     called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
 
-    data = get_news.fetch_recent_kr_news(minutes=30, now_utc=called_utc)
+    data = fetch_recent_kr_news(minutes=30, now_utc=called_utc)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -80,10 +80,10 @@ def save_news_to_db():
                 article["article_id"],
                 article.get("title"),
                 article.get("link"),
-                get_news.serialize(article.get("creator")),
+                serialize(article.get("creator")),
                 article.get("description"),
                 article.get("content"),
-                get_news.parse_datetime(article.get("pubDate")),
+                parse_datetime(article.get("pubDate")),
                 article.get("pubDateTZ"),
                 article.get("image_url"),
                 article.get("video_url"),
@@ -93,8 +93,8 @@ def save_news_to_db():
                 article.get("source_url"),
                 article.get("source_icon"),
                 article.get("language"),
-                get_news.serialize(article.get("country")),
-                get_news.serialize(article.get("category")),
+                serialize(article.get("country")),
+                serialize(article.get("category")),
                 article.get("duplicate"),
             ))
             conn.commit()
