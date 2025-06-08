@@ -2,31 +2,26 @@ from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from news_issuing.utils import preprocess_text
 
-def compute_embeddings(items, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
+def compute_embeddings(items, model_name="paraphrase-multilingual-MiniLM-L12-v2"):
     """
     SBERT 모델로 각 뉴스 기사(제목+본문)의 임베딩을 계산합니다.
-    - items: dict 리스트, 각 dict에 'title'과 'body' 필드가 있다고 가정
-    - model_name: HuggingFace 문장 임베딩 모델 이름
-    반환:
-      embeddings (Nxd numpy array)
+    - items: dict 리스트 (각 dict에 'title'과 'content' 필드가 있다고 가정)
     """
     model = SentenceTransformer(model_name)
-    texts = [preprocess_text(item.get("title", ""), item.get("body", "")) for item in items]
+    texts = [preprocess_text(x.get("title", ""), x.get("content", "")) for x in items]
     embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=True)
     return embeddings
 
-def cluster_items(items: list, dist_thresh: float = 0.6) -> list:
+def cluster_items(items: list, dist_thresh=0.6) -> list:
     """
-    입력된 뉴스 항목 리스트를 임베딩 후 계층적 군집화하여,
-    각 항목의 'id'와 'cluster_id'만 포함된 결과 리스트를 반환합니다.
-
-    - items: list of dict, 각 dict에 최소 'id', 'title', 'body' 필드 필요
-    - dist_thresh: AgglomerativeClustering distance_threshold 값
-
-    반환:
-      list of dict, 각 dict에 'id'와 'cluster_id'
+    - items: 뉴스 dict 리스트. 각 dict에 최소한 'article_id', 'title', 'content'가 있어야 함.
+    - dist_thresh: cosine 거리 임계값
+    반환값: [{'article_id': ..., 'cluster_id': ...}, ...]
     """
+    # 1) 임베딩 계산
     embeddings = compute_embeddings(items)
+
+    # 2) 계층적 클러스터링
     clustering = AgglomerativeClustering(
         n_clusters=None,
         metric="cosine",
@@ -34,4 +29,13 @@ def cluster_items(items: list, dist_thresh: float = 0.6) -> list:
         distance_threshold=dist_thresh
     )
     labels = clustering.fit_predict(embeddings)
-    return [{"id": item.get("id"), "cluster_id": int(label)} for item, label in zip(items, labels)]
+
+    # 3) 결과 매핑
+    results = []
+    for item, lbl in zip(items, labels):
+        results.append({
+            "article_id": item["article_id"],
+            "cluster_id": int(lbl)
+        })
+
+    return results
