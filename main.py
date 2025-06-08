@@ -56,12 +56,15 @@ from get_news import fetch_recent_kr_news, serialize, parse_datetime
 @app.route('/save-news', methods=['POST'])
 def save_news_to_db():
     """
-    JSON body: { "X-Trigger-Time": "...",}
+    JSON headers: { "X-Trigger-Time": "...",}
     """
     called_utc_str = request.headers.get("X-Trigger-Time")
-    called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
+    try:
+        called_utc = datetime.fromisoformat(called_utc_str.replace("Z", "+00:00"))
+    except Exception as e:
+        return jsonify({"error": f"Invalid datetime format: {called_utc_str}"}), 400
 
-    data = fetch_recent_kr_news(minutes=30, now_utc=called_utc)
+    data = fetch_recent_kr_news(minutes=30+15, now_utc=called_utc)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -105,7 +108,7 @@ def save_news_to_db():
     
     cursor.close()
     conn.close()
-    return
+    return jsonify({"status": "success"}), 200
 
 
 @app.route('/')
