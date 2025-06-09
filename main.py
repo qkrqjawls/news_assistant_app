@@ -237,7 +237,7 @@ def save_issues_to_db():
                 """
                 유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장.
                 """
-                merged_group = sim[2] + issue['related_news_list']
+                merged_group = list(set(sim[2]).union(issue['related_news_list']))
                 got = summarize_and_save([merged_group])[0]
 
                 new_embedding = (sim[3]*len(sim[2]) + issue['sentence_embedding']*len(issue['related_news_list'])) / (len(sim[2]) + len(issue['related_news_list']))

@@ -1,4 +1,4 @@
-# from news_issuing.embedding_and_cluster import cluster_items
+from news_issuing.embedding_and_cluster import cluster_items
 # from news_issuing.summarize_issues import summarize_and_save
 # L = [
 #   {
@@ -28,5 +28,3 @@
 # ]
 # K, t = cluster_items(L)
 # print(t)
-
-print("Hello World!")
