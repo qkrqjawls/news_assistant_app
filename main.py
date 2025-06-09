@@ -53,12 +53,24 @@ def test_db():
     
 from get_news import fetch_recent_kr_news, serialize, parse_datetime
 
-@app.route('/save-news', methods=['GET'])
+@app.route('/save-news', methods=['POST'])
 def save_news_to_db():
-    
-    called_utc = datetime.now(timezone.utc)
+    """
+    JSON body: { "time": "...", "minutes": xx}
+    """
+    Q = request.get_json()
 
-    data = fetch_recent_kr_news(minutes=30+15, now_utc=called_utc)
+    try:
+        called_utc = parse_datetime(Q["time"])
+    except:
+        called_utc = datetime.now(timezone.utc)
+    if not called_utc:
+        called_utc = datetime.now(timezone.utc)
+
+    if "minutes" not in Q:
+        data = fetch_recent_kr_news(minutes=30+15, now_utc=called_utc)
+    else:
+        data = fetch_recent_kr_news(minutes= Q["minutes"], now_utc=called_utc)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -131,9 +143,9 @@ def save_issues_to_db():
     full_count = cursor.fetchall()[0][0]
 
     # work
-    cursor.execute("""SELECT * FROM news_articles WHERE id > %s AND id <= %s;""", (proceeded, full_count))
+    cursor.execute("""SELECT article_id, title, content, pub_date,  FROM news_articles WHERE id > %s AND id <= %s;""", (proceeded, full_count))
     rows = cursor.fetchall()
-    cols = ['article_id', 'title', 'link', 'creator', 'description', 'content', 'pub_date', 'pub_date_tz', 'image_url', 'video_url', 'source_id', 'source_name', 'source_priority', 'source_url', 'source_icon', 'language', 'country', 'category', 'duplicate']
+    cols = ['article_id', 'title', 'content', 'pub_date']
     articles = list(map(lambda row: ({
         col : row[idx] for idx, col in enumerate(cols)
     }), rows))
