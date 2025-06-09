@@ -58,7 +58,7 @@ def summarize_with_openai(cluster_texts: list[str]) -> dict:
             "Content-Type": "application/json"
         },
         json={
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4o",
             "messages": [
                 {"role": "system", "content": "당신은 뉴스 요약 전문가입니다."},
                 {"role": "user", "content": prompt}

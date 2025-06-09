@@ -16,7 +16,7 @@ def cluster_items(items: list, dist_thresh=0.6) -> list:
     """
     - items: 뉴스 dict 리스트. 각 dict에 최소한 'article_id', 'title', 'content'가 있어야 함.
     - dist_thresh: cosine 거리 임계값
-    반환값: [{'article_id': ..., 'cluster_id': ...}, ...]
+    반환값: [[article : dict, ...], ...] : list
     """
     # 1) 임베딩 계산
     embeddings = compute_embeddings(items)
