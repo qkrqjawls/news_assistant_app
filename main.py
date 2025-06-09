@@ -143,6 +143,8 @@ def load_ndarray(blob: bytes) -> np.ndarray:
     return np.load(buf, allow_pickle=False)
 
 def my_cosine_similarity(vec1 : np.ndarray, vec2 : np.ndarray): # 1D cosine sim
+    if vec1 is None or vec2 is None or vec1.shape != vec2.shape:
+        return -1  # 또는 0.0
     return cosine_similarity(
         vec1.reshape(1, -1),
         vec2.reshape(1, -1)
@@ -223,7 +225,11 @@ def save_issues_to_db():
     cursor.execute("""SELECT id, sentence_embedding, related_news_list FROM issues;""")
     existing_issues = cursor.fetchall()
     if existing_issues:
-        existing_issues = [(i, load_ndarray(vec), l.split()) for i, vec, l in existing_issues if load_ndarray(vec)]
+        existing_issues = [
+            (i, arr, l.split())
+            for i, vec, l in existing_issues
+            if (arr := load_ndarray(vec)) is not None
+        ]
 
         for idx, issue in enumerate(issues):
             sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec) for i,vec,l in existing_issues], key=lambda x:x[1])
@@ -232,9 +238,16 @@ def save_issues_to_db():
                 유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장.
                 """
                 merged_group = list(set(sim[2] + issue['related_news_list']))
-                got = summarize_and_save([merged_group])[0]
+                got_list = summarize_and_save([merged_group])
+                if not got_list or 'issue_name' not in got_list[0]:
+                    continue  # 또는 fallback 처리
+                got = got_list[0]
 
-                new_embedding = (sim[3]*len(sim[2]) + issue['sentence_embedding']*len(issue['related_news_list'])) / (len(sim[2]) + len(issue['related_news_list']))
+                len_a = len(sim[2])
+                len_b = len(issue['related_news_list'])
+                if len_a + len_b == 0:
+                    continue  # 또는 예외 처리
+                new_embedding = (sim[3]*len_a + issue['sentence_embedding']*len_b) / (len_a + len_b)
                 
                 cursor.execute("""UPDATE issues SET
                             issue_name    = %s,
