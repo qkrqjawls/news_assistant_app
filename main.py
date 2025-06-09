@@ -2,6 +2,8 @@ import os
 from datetime import datetime, timezone
 import mysql.connector
 from flask import Flask, request, jsonify
+import numpy as np
+import io
 
 app = Flask(__name__)
 
@@ -10,6 +12,7 @@ DB_USER     = os.environ.get("DB_USER", "appuser")
 DB_PASS     = os.environ.get("DB_PASS", "secure_app_password")
 DB_NAME     = os.environ.get("DB_NAME", "myappdb")
 DB_SOCKET   = os.environ.get("DB_SOCKET")   # ex) "/cloudsql/project:region:instance"
+ISSUE_MERGING_BOUND = 0.8
 
 
 import sys
@@ -58,19 +61,16 @@ def save_news_to_db():
     """
     JSON body: { "time": "...", "minutes": xx}
     """
-    Q = request.get_json()
+    Q = request.get_json(silent=True) or {}
 
+    # time 파싱 (실패 시 None → 마지막에 현재 UTC로 대체)
     try:
-        called_utc = parse_datetime(Q["time"])
-    except:
-        called_utc = datetime.now(timezone.utc)
-    if not called_utc:
-        called_utc = datetime.now(timezone.utc)
+        called_utc = parse_datetime(Q.get("time"))
+    except Exception:
+        called_utc = None
+    called_utc = called_utc or datetime.now(timezone.utc)
 
-    if "minutes" not in Q:
-        data = fetch_recent_kr_news(minutes=30+15, now_utc=called_utc)
-    else:
-        data = fetch_recent_kr_news(minutes= Q["minutes"], now_utc=called_utc)
+    data = fetch_recent_kr_news(minutes=Q.get("minutes", 45), now_utc=called_utc)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -119,38 +119,100 @@ def save_news_to_db():
 
 from news_issuing.embedding_and_cluster import cluster_items
 from news_issuing.summarize_issues import summarize_and_save
+from sklearn.metrics.pairwise import cosine_similarity
 
-def predict_date(related_articles : list):
+def predict_date(related_articles: list):
+    dates = sorted(a['pub_date'] for a in related_articles)
+    n = len(dates)
+    if n == 0:
+        return None
+    if n < 3:
+        # 데이터가 1~2개밖에 없으면 중앙값을 그냥 리턴
+        return dates[n//2]
+
     import statistics
+    mid = n // 2
+    lower_half = dates[:mid]
+    return statistics.median(lower_half)
 
-    data = sorted(map(lambda x:x['pub_date'], related_articles))
-    mid = len(data) // 2
-    lower_half = data[:mid]  # 아래 절반
+def arr_to_blob(arr : np.ndarray):
+    binary = io.BytesIO()
+    np.save(binary, arr)
+    binary_value = binary.getvalue()
+    return binary_value
 
-    q1 = statistics.median(lower_half)
-    return q1
+def load_ndarray(blob: bytes) -> np.ndarray:
+    if not blob:
+        return None
+    buf = io.BytesIO(blob)
+    buf.seek(0)
+    return np.load(buf, allow_pickle=False)
+
+def my_cosine_similarity(vec1 : np.ndarray, vec2 : np.ndarray): # 1D cosine sim
+    return cosine_similarity(
+        vec1.reshape(1, -1),
+        vec2.reshape(1, -1)
+    )[0, 0]
 
 
-@app.route('/save_issues', methods=['POST'])
+
+@app.route('/save-issues', methods=['POST'])
 def save_issues_to_db():
-    conn = get_db_connection()
+    conn   = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""SELECT my_val FROM kv_int_store WHERE name = %s""", ('proceeded',))
-    proceeded = cursor.fetchall()[0][0]
-    
-    cursor.execute("""SELECT MAX(id) FROM news_articles;""")
-    full_count = cursor.fetchall()[0][0]
+    # 1) JSON body 파싱 (None 안전 처리)
+    Q = request.get_json(silent=True) or {}
 
-    # work
-    cursor.execute("""SELECT article_id, title, content, pub_date,  FROM news_articles WHERE id > %s AND id <= %s;""", (proceeded, full_count))
-    rows = cursor.fetchall()
-    cols = ['article_id', 'title', 'content', 'pub_date']
-    articles = list(map(lambda row: ({
-        col : row[idx] for idx, col in enumerate(cols)
-    }), rows))
+    # 2) start_id / proceeded 결정
+    start_id = Q.get('start_id')
+    if start_id is not None:
+        try:
+            proceeded = int(start_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "start_id must be an integer"}), 400
+        update_kv = False
+    else:
+        cursor.execute("SELECT my_val FROM kv_int_store WHERE name=%s",
+                       ('proceeded',))
+        row = cursor.fetchone()
+        proceeded = row[0] if row and row[0] is not None else 0
+        update_kv = True
 
-    clustered_data = cluster_items(articles)
+    # 3) end_id / full_count 결정
+    end_id = Q.get('end_id')
+    if end_id is not None:
+        try:
+            full_count = int(end_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "end_id must be an integer"}), 400
+        update_kv = False
+    else:
+        cursor.execute("SELECT MAX(id) FROM news_articles;")
+        row = cursor.fetchone()
+        full_count = row[0] if row and row[0] is not None else 0
+
+    # 4) id 범위 유효성 검사
+    if proceeded > full_count:
+        return jsonify({"error": "start_id cannot be greater than end_id"}), 400
+    if proceeded < 0 or full_count < 0:
+        return jsonify({"error":"IDs must be non-negative"}), 400
+
+    # 5) 실제 기사 조회
+    cursor.execute("""
+        SELECT article_id, title, content, pub_date
+          FROM news_articles
+         WHERE id > %s AND id <= %s;
+    """, (proceeded, full_count))
+    cols     = ['article_id', 'title', 'content', 'pub_date']
+    articles = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    if not articles:
+        cursor.close()
+        conn.close()
+        return jsonify({"status":"no_new_articles"}), 200
+
+    clustered_data, group_rep_vec = cluster_items(articles)
     issue_summary = summarize_and_save(clustered_data)
     date_pred = [predict_date(i) for i in clustered_data]
 
@@ -158,21 +220,55 @@ def save_issues_to_db():
         'date' : i[2],
         'issue_name' : i[1]['issue_name'],
         'summary' : i[1]['issue_summary'],
-        'related_news_list' : " ".join([x['article_id'] for x in i[0]])
-    } for i in zip(clustered_data, issue_summary, date_pred)]
+        'related_news_list' : [x['article_id'] for x in i[0]],
+        'sentence_embedding' : i[3]
+    } for i in zip(clustered_data, issue_summary, date_pred, group_rep_vec)]
 
     print("clustering and summerization:", issues)
 
-    for issue in issues:
-        cursor.execute("""INSERT IGNORE INTO issues (date, issue_name, summary, related_news_list) VALUES (%s, %s, %s, %s)""",
-                       (issue['date'], issue['issue_name'], issue['summary'], issue['related_news_list']))
+    cursor.execute("""SELECT id, sentence_embedding, related_news_list FROM issues;""")
+    existing_issues = cursor.fetchall()
+    if existing_issues:
+        existing_issues = [(i, load_ndarray(vec), l.split()) for i, vec, l in existing_issues if load_ndarray(vec)]
 
-    cursor.execute("""REPLACE INTO kv_int_store (name, my_val) VALUES (%s, %s);""", ('proceeded', full_count))
+        for idx, issue in enumerate(issues):
+            sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec) for i,vec,l in existing_issues], key=lambda x:x[1])
+            if sim[1] > ISSUE_MERGING_BOUND:
+                """
+                유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장.
+                """
+                merged_group = sim[2] + issue['related_news_list']
+                got = summarize_and_save([merged_group])[0]
+
+                new_embedding = (sim[3]*len(sim[2]) + issue['sentence_embedding']*len(issue['related_news_list'])) / (len(sim[2]) + len(issue['related_news_list']))
+                
+                cursor.execute("""UPDATE issues SET
+                            issue_name    = %s,
+                            summary           = %s,
+                            related_news_list = %s,
+                            sentence_embedding= %s
+                            WHERE id = %s;""",
+                        (got['issue_name'], got['issue_summary'], " ".join(merged_group), arr_to_blob(new_embedding), sim[0]))
+                issues[idx] = None
+
+    for issue in issues:
+        if issue:
+            cursor.execute("""INSERT IGNORE INTO issues (date, issue_name, summary, related_news_list, sentence_embedding) VALUES (%s, %s, %s, %s, %s)""",
+                           (issue['date'], issue['issue_name'], issue['summary'], " ".join(issue['related_news_list']), arr_to_blob(issue['sentence_embedding'])))
+
+    # 6) 커스텀 값 미사용 시에만 kv_int_store 갱신
+    if update_kv:
+        cursor.execute("""
+            REPLACE INTO kv_int_store (name, my_val)
+            VALUES (%s, %s);
+        """, ('proceeded', full_count))
+
     conn.commit()
 
     cursor.close()
     conn.close()
-    return jsonify({"status": "success"}), 200
+    return jsonify({"status": "success",
+                    "used_range": [proceeded, full_count]}), 200
 
 @app.route('/')
 def home():
