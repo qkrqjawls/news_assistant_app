@@ -1,3 +1,7 @@
+import os
+os.environ['TRANSFORMERS_CACHE'] = '/tmp/transformers'
+os.environ['HF_HOME'] = '/tmp/huggingface'
+
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from news_issuing.utils import preprocess_text
