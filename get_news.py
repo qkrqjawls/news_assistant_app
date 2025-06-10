@@ -21,7 +21,7 @@ def fetch_recent_kr_news(minutes=30, now_utc=datetime.now(timezone.utc), per_pag
 
     if not isinstance(now_utc, datetime): now_utc = datetime.now(timezone.utc)
 
-    cutoff = now_utc - timedelta(minutes=minutes)
+    cutoff = now_utc - timedelta(minutes=int(minutes))
 
     seen_links = set()
     results = []

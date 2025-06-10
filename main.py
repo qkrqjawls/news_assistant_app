@@ -70,7 +70,7 @@ def save_news_to_db():
         called_utc = None
     called_utc = called_utc or datetime.now(timezone.utc)
 
-    data = fetch_recent_kr_news(minutes=Q.get("minutes", 45), now_utc=called_utc)
+    data = fetch_recent_kr_news(minutes=int(Q.get("minutes", 45)), now_utc=called_utc)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -208,7 +208,7 @@ def save_issues_to_db():
         conn.close()
         return jsonify({"status":"no_new_articles"}), 200
 
-    clustered_data, group_rep_vec = cluster_items(articles)
+    clustered_data, group_rep_vec = cluster_items(articles, dist_thresh=0.4)
     issue_summary = summarize_and_save(clustered_data)
     date_pred = [predict_date(i) for i in clustered_data]
 
