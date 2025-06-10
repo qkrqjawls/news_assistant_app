@@ -6,7 +6,7 @@ FROM nvidia/cuda:12.3.1-devel-ubuntu22.04 AS builder
 
 # 환경 변수 설정
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHON_VERSION=3.12 
+ENV PYTHON_VERSION=3.10
 
 # 시스템 업데이트 및 필요한 패키지 설치
 # Python, pip, build-essential (컴파일러), git, cmake (Faiss 빌드용),
