@@ -197,12 +197,40 @@ def predict_date(related_articles: list):
     # 날짜 데이터가 datetime 객체라고 가정
     return dates[n//4] # 25% 지점의 날짜 반환
 
+def predict_date(related_articles: list):
+    valid_dates = []
+    for a in related_articles:
+        pub_date = a.get('pub_date')
+        if pub_date:
+            if isinstance(pub_date, datetime):
+                valid_dates.append(pub_date)
+            else:
+                try:
+                    parsed_date = parse_datetime(pub_date)
+                    if parsed_date:
+                        valid_dates.append(parsed_date)
+                except Exception as e:
+                    logging.warning(f"Failed to parse date '{pub_date}': {e}")
+    
+    if not valid_dates:
+        logging.warning("No valid 'pub_date' found in related articles. Returning None for date prediction.")
+        return None
+    
+    dates = sorted(valid_dates)
+    n = len(dates)
+    
+    # 25% 지점 유지 (원하는 경우)
+    return dates[n // 4] 
+    # 또는 가장 최신 날짜: return dates[-1]
+
+# ... (상단 import 및 Flask 초기화 등 동일) ...
+
 @app.route('/save-issues', methods=['POST'])
 def save_issues_to_db():
     start_total_time = time.time()
     conn = get_db_connection()
     cursor = conn.cursor()
-    logging.info("Starting save-issues process (new logic)...")
+    logging.info("Starting save-issues process (new logic with Faiss IDMap and immediate new issue add)...")
 
     Q = request.get_json(silent=True) or {}
     
@@ -242,10 +270,8 @@ def save_issues_to_db():
         logging.error(f"IDs must be non-negative (proceeded={proceeded}, full_count={full_count})")
         return jsonify({"error":"IDs must be non-negative"}), 400
 
-    # 1. 새로운 기사 조회 (아직 processed_article_id가 없는 기사)
+    # 1. 새로운 기사 조회
     start_article_fetch_time = time.time()
-    # 이미 processed_article_id가 있는 기사는 건너뛰도록 WHERE 절 추가
-    # 아니면 `kv_int_store`를 이용한 `id > %s AND id <= %s` 방식 그대로 사용
     cursor.execute("""
         SELECT id, article_id, title, content, pub_date
           FROM news_articles
@@ -266,122 +292,121 @@ def save_issues_to_db():
     cursor.execute("""SELECT id, sentence_embedding, related_news_list, `date`, issue_name FROM issues;""")
     existing_issues_raw = cursor.fetchall()
 
-    existing_issues_info = [] # (issue_id, tensor_embedding, related_articles_list, issue_date, issue_name)
-    existing_embeddings_np = [] # Faiss를 위한 numpy 배열
-    existing_issue_id_map = {} # Faiss 인덱스에 매핑될 issue_id
+    existing_issues_data = {} # {issue_id: (tensor_embedding, related_articles_list, issue_date, issue_name)}
+    existing_embeddings_np_list = [] # Faiss를 위한 numpy 배열 리스트
+    existing_issue_ids_for_faiss = [] # Faiss에 추가될 issue_id 리스트
 
     if existing_issues_raw:
         for i_id, vec_blob, related_list_str, pub_date, issue_name in existing_issues_raw:
             np_array = load_ndarray(vec_blob)
             if np_array is not None:
-                # GPU 텐서는 유사도 직접 계산 시 사용, Faiss는 numpy를 사용
-                existing_issues_info.append((i_id, torch.from_numpy(np_array).to(device), related_list_str.split(), pub_date, issue_name))
-                existing_embeddings_np.append(np_array)
-                existing_issue_id_map[len(existing_embeddings_np) - 1] = i_id # Faiss 내부 인덱스 -> issue_id
+                existing_embeddings_np_list.append(np_array.astype('float32')) 
+                existing_issue_ids_for_faiss.append(i_id)
+                existing_issues_data[i_id] = (torch.from_numpy(np_array).to(device), related_list_str.split(), pub_date, issue_name)
     
-    existing_embeddings_np = np.array(existing_embeddings_np).astype('float32') # Faiss는 float32를 기대
-    logging.info(f"Loaded {len(existing_issues_info)} existing issues in {time.time() - start_existing_issues_load_time:.2f} seconds.")
-
-    # Faiss 인덱스 생성 (기존 이슈가 있을 경우)
+    # Faiss 인덱스 생성 (IndexIDMap 사용)
     faiss_index = None
-    if faiss and existing_embeddings_np.shape[0] > 0:
-        d = existing_embeddings_np.shape[1] # 임베딩 차원
-        faiss_index = faiss.IndexFlatIP(d) # 내적(Inner Product) 기반 인덱스 (코사인 유사도에 적합)
-        faiss_index.add(existing_embeddings_np)
-        logging.info(f"Faiss index created with {faiss_index.ntotal} vectors.")
+    if faiss and len(existing_embeddings_np_list) > 0:
+        d = existing_embeddings_np_list[0].shape[0] # 임베딩 차원
+        quantizer = faiss.IndexFlatIP(d) 
+        faiss_index = faiss.IndexIDMap(quantizer)
+        
+        # 일괄 추가
+        faiss_index.add_with_ids(np.array(existing_embeddings_np_list), np.array(existing_issue_ids_for_faiss))
+        logging.info(f"Faiss IndexIDMap created with {faiss_index.ntotal} vectors.")
+    else:
+        # 기존 이슈가 없더라도, Faiss가 있으면 빈 인덱스를 생성해 둡니다.
+        # 새로운 이슈가 생성될 때 즉시 추가할 수 있도록.
+        if faiss and new_articles: # 새로운 기사가 있어서 임베딩 차원을 알 수 있을 때
+            # compute_embeddings가 반환할 임베딩 차원을 미리 예상
+            # (이것은 최적의 방법은 아니지만, 현재 흐름에서 임베딩 차원을 알기 위한 임시 방편)
+            # compute_embeddings 함수의 반환값 구조에 따라 수정 필요
+            # 예를 들어, compute_embeddings가 최소 1개의 임베딩을 항상 반환한다면:
+            temp_emb = compute_embeddings([new_articles[0]])
+            if temp_emb.shape[0] > 0:
+                d = temp_emb.shape[1]
+                quantizer = faiss.IndexFlatIP(d) 
+                faiss_index = faiss.IndexIDMap(quantizer)
+                logging.info(f"Faiss IndexIDMap initialized (empty) for dimension {d}.")
+            else:
+                logging.warning("Could not determine embedding dimension from new articles to initialize Faiss.")
+        elif faiss: # 새로운 기사가 없는데도 Faiss를 초기화해야 한다면, 미리 정의된 임베딩 차원 사용
+             # 예를 들어, EMBEDDING_DIM = 768 와 같은 상수를 정의
+             # d = EMBEDDING_DIM
+             logging.warning("Faiss will not be initialized as no existing issues and no new articles to determine dimension.")
+
+    logging.info(f"Loaded {len(existing_issues_data)} existing issues in {time.time() - start_existing_issues_load_time:.2f} seconds.")
 
     # 3. 각 새로운 기사 처리
-    articles_to_update_kv_processed = [] # processed_article_id를 업데이트할 기사 ID
-    updated_issues_for_db = {} # {issue_id: {issue_name, summary, related_news_list, sentence_embedding, date}}
-    new_issues_for_db = [] # [ {date, issue_name, summary, related_news_list, sentence_embedding} ]
+    articles_to_update_kv_processed = [] 
+    updated_issues_for_db = {} 
+    # new_issues_for_db는 이제 각 이슈를 바로 처리하므로 필요 없음
 
     start_processing_new_articles_loop_time = time.time()
-    # 배치로 임베딩 계산
-    new_article_embeddings = compute_embeddings(new_articles) # (num_articles, embed_dim) numpy 배열
-    new_article_embeddings_gpu = torch.from_numpy(new_article_embeddings).to(device) # GPU 텐서
+    # 배치로 임베딩 계산 (compute_embeddings는 numpy 배열을 반환한다고 가정)
+    new_article_embeddings_np = compute_embeddings(new_articles) # (num_articles, embed_dim) numpy 배열
+    # 모든 임베딩이 L2 정규화되어 있는지 확인 (compute_embeddings 내부에서 처리하거나 여기서 명시적으로)
+    if new_article_embeddings_np.shape[0] > 0:
+        new_article_embeddings_np = F.normalize(torch.from_numpy(new_article_embeddings_np), p=2, dim=1).numpy()
+    
+    new_article_embeddings_gpu = torch.from_numpy(new_article_embeddings_np).to(device) # GPU 텐서
 
+    # 이 시점에서 커밋되지 않은 트랜잭션이 있을 수 있으므로,
+    # 중간에 DB 연결이 끊어지면 롤백될 수 있습니다.
+    # 하지만 Cloud Run의 단일 요청 처리 특성상 큰 문제는 아닙니다.
+
+    new_issues_count_in_this_run = 0 # 이 실행에서 생성된 새 이슈 수
+    
     for i, new_article in enumerate(new_articles):
-        new_article_emb_np = new_article_embeddings[i:i+1] # (1, embed_dim) numpy
+        new_article_emb_np = new_article_embeddings_np[i:i+1].astype('float32') # (1, embed_dim) numpy
         new_article_emb_gpu = new_article_embeddings_gpu[i] # (embed_dim,) torch tensor
         
         best_match_id = None
         best_sim_score = -1.0
         
-        # 4. 유사 이슈 검색 (Faiss 활용 또는 직접 유사도 계산)
+        # 4. 유사 이슈 검색 (Faiss 활용)
         if faiss_index and faiss_index.ntotal > 0:
-            # Faiss를 사용하여 K개의 최근접 이웃 검색
-            # Faiss의 Inner Product는 코사인 유사도와 직접적으로 관련 (L2 정규화된 벡터의 내적)
             k = 1 # 가장 유사한 1개만 찾음
-            # D: 유사도 점수, I: 해당 벡터의 인덱스 (Faiss 인덱스 내부)
+            # D: 유사도 점수, I: 해당 벡터의 ID (우리의 issue_id)
             D, I = faiss_index.search(new_article_emb_np, k) 
             
-            # 날짜 필터링 및 유사도 임계값 적용
             for j in range(k):
-                faiss_idx = I[0][j]
+                matched_issue_id = I[0][j]
                 sim_score = D[0][j]
                 
-                # Faiss는 L2 정규화된 벡터에 대해 코사인 유사도를 직접 반환.
-                # 그러나 Faiss IndexFlatIP는 실제로는 내적 값을 반환하므로, 
-                # 벡터가 L2 정규화되어 있으면 내적 == 코사인 유사도이다.
-                # (Faiss는 기본적으로 L2 distances를 계산하지 않고 Inner Product를 계산하기에
-                # L2 정규화가 되어있는지 확실히 하는 것이 중요하다)
-                
-                # 기존 이슈 정보를 찾아옴
-                # existing_issues_info는 (issue_id, tensor_embedding, related_articles_list, issue_date, issue_name)
-                # 이 인덱스는 faiss_idx와 동일하지 않을 수 있다.
-                # -> existing_issue_id_map을 사용하여 매핑해야 함.
-                if faiss_idx != -1: # 유효한 인덱스
-                    matched_issue_id = existing_issue_id_map[faiss_idx]
+                # matched_issue_id != -1는 Faiss가 유효한 매치를 찾았음을 의미
+                # matched_issue_id in existing_issues_data는 Faiss가 반환한 ID가
+                # 현재 메모리에 로드된 기존 이슈 데이터에 실제로 존재하는지 확인 (만약 DB에만 있고 메모리에 없는 경우 방지)
+                if matched_issue_id != -1 and matched_issue_id in existing_issues_data: 
+                    matched_issue_info = existing_issues_data[matched_issue_id]
                     
-                    # existing_issues_info에서 해당 이슈 찾기 (비효율적일 수 있으나, 보통 기존 이슈 수가 너무 많지는 않다고 가정)
-                    # 실제로는 existing_issues_info도 딕셔너리로 미리 만들어두는 것이 좋음.
-                    matched_issue = next((issue for issue in existing_issues_info if issue[0] == matched_issue_id), None)
-
-                    if matched_issue and abs(matched_issue[3] - new_article['pub_date']) < FOUR_HOURS: # matched_issue[3] = issue_date
+                    # 날짜 필터링 (4시간 이내)
+                    if abs(matched_issue_info[2] - new_article['pub_date']) < FOUR_HOURS: 
                         if sim_score > best_sim_score:
                             best_sim_score = sim_score
                             best_match_id = matched_issue_id
-                            best_match_info = matched_issue # (i_id, existing_emb_gpu, related_ids_list, issue_date, issue_name)
-        else: # Faiss가 없거나 기존 이슈가 없는 경우, 직접 유사도 계산 (비효율적이지만 폴백)
-            for existing_issue_id, existing_emb_gpu, related_ids_list, issue_date, issue_name in existing_issues_info:
-                if abs(issue_date - new_article['pub_date']) < FOUR_HOURS:
-                    sim_score = my_cosine_similarity_torch(new_article_emb_gpu, existing_emb_gpu)
-                    if sim_score > best_sim_score:
-                        best_sim_score = sim_score
-                        best_match_id = existing_issue_id
-                        best_match_info = (existing_issue_id, existing_emb_gpu, related_ids_list, issue_date, issue_name)
+                            best_match_info = matched_issue_info 
 
         # 5. 병합 또는 신규 이슈 생성
         if best_match_id and best_sim_score > ISSUE_MERGING_BOUND:
             logging.debug(f"Article {new_article['article_id']} matched with existing issue {best_match_id} (sim: {best_sim_score:.4f})")
             
             # 병합 로직
-            # 기존 이슈 업데이트를 위한 데이터 준비
-            # best_match_info: (i_id, tensor_embedding, related_articles_list, issue_date, issue_name)
-            existing_issue_id, existing_emb_gpu, existing_related_ids, existing_issue_date, existing_issue_name = best_match_info
+            existing_emb_gpu, existing_related_ids, existing_issue_date, existing_issue_name = best_match_info
 
-            # 관련 기사 목록 업데이트
             all_merged_article_ids = list(set(existing_related_ids + [new_article['article_id']]))
 
-            # 병합된 기사들의 임베딩 평균 계산
-            # 현재 기사의 임베딩 (GPU)과 기존 이슈의 대표 임베딩 (GPU)을 사용하여 새로운 평균 임베딩 계산
-            # 기존 이슈의 임베딩은 best_match_info[1] (GPU 텐서)
+            # 병합된 기사들의 임베딩 평균 계산 (가중 평균)
             len_existing = len(existing_related_ids)
-            len_new_article = 1 # 새로운 기사 하나
+            len_new_article = 1 
             
-            # 가중 평균 (기사 수에 비례)
             new_issue_embedding_gpu = (existing_emb_gpu * len_existing + new_article_emb_gpu * len_new_article) / (len_existing + len_new_article)
             new_issue_embedding_np = new_issue_embedding_gpu.cpu().numpy()
 
-            # 병합된 기사들에 대한 요약 재실행 (필요한 경우)
-            # 이 단계가 매우 느릴 수 있으므로, 최소한의 경우에만 수행하도록 최적화가 필요할 수 있음.
-            # 예: 기사가 일정 수 이상 추가될 때만 요약 재실행
-            # 여기서는 일단 모든 병합에 대해 요약 재실행으로 구현
-            
-            # 병합된 모든 기사의 원본 텍스트를 다시 가져와야 함 (요약 모델 입력용)
             merged_articles_full_data = []
             if all_merged_article_ids:
                 placeholders = ', '.join(['%s'] * len(all_merged_article_ids))
+                # 기존 DB 커넥션과 커서를 재사용
                 cursor.execute(f"""
                     SELECT article_id, title, content, pub_date
                     FROM news_articles
@@ -390,61 +415,12 @@ def save_issues_to_db():
                 cols = ['article_id', 'title', 'content', 'pub_date']
                 merged_articles_full_data = [dict(zip(cols, row)) for row in cursor.fetchall()]
             
-            new_summary_result = summarize_and_save([merged_articles_full_data])[0] # 결과는 리스트의 첫 번째 요소
+            new_summary_result = summarize_and_save([merged_articles_full_data])[0] 
             
-            updated_issue_id = existing_issue_id
-            updated_issues_for_db[updated_issue_id] = {
-                'issue_name': new_summary_result['issue_name'],
-                'summary': new_summary_result['issue_summary'],
-                'related_news_list': " ".join(all_merged_article_ids),
-                'sentence_embedding': arr_to_blob(new_issue_embedding_np),
-                'date': predict_date(merged_articles_full_data) # 병합된 기사들의 날짜로 업데이트
-            }
-            # 기존 issues_info 목록도 업데이트 (다음 기사 처리 시 참조할 수 있도록)
-            # Find and update the corresponding item in existing_issues_info
-            for k, (i_id, emb_gpu, related_ids, i_date, i_name) in enumerate(existing_issues_info):
-                if i_id == existing_issue_id:
-                    existing_issues_info[k] = (
-                        i_id,
-                        new_issue_embedding_gpu, # GPU 텐서 업데이트
-                        all_merged_article_ids, # related_ids_list 업데이트
-                        predict_date(merged_articles_full_data), # date 업데이트
-                        new_summary_result['issue_name'] # name 업데이트
-                    )
-                    # Faiss 인덱스도 업데이트 해야 하지만, Faiss IndexFlat은 업데이트를 직접 지원하지 않음.
-                    # -> 전체 인덱스를 다시 생성하거나, Faiss IndexIDMap 같은 것을 고려해야 함.
-                    # -> 복잡성을 줄이기 위해 여기서는 Faiss 인덱스는 재성성하지 않고, 다음번 `save-issues` 호출 시 전체 로딩하도록.
-                    #    단, 병합된 이슈는 다음 기사 처리 시 기존 이슈 목록에서 제외하는 처리를 하거나,
-                    #    faiss_index.remove_ids()를 사용해야 함.
-                    #    여기서는 업데이트된 이슈는 새로운 기사가 들어오면 Faiss 인덱스에서 검색될 수 있도록 가정
-                    break
-
-
-        else:
-            logging.debug(f"Article {new_article['article_id']} created new issue (best sim: {best_sim_score:.4f})")
-            # 새로운 이슈 생성 로직
-            # 단일 기사에 대한 요약
-            single_article_summary = summarize_and_save([[new_article]])[0] # summarize_and_save는 리스트의 리스트를 기대
-            new_issues_for_db.append({
-                'date': new_article['pub_date'], # 단일 기사의 날짜
-                'issue_name': single_article_summary['issue_name'],
-                'summary': single_article_summary['issue_summary'],
-                'related_news_list': " ".join([new_article['article_id']]),
-                'sentence_embedding': arr_to_blob(new_article_emb_np.squeeze(axis=0)) # (embed_dim,) 형태로 변환
-            })
-        
-        # 기사가 처리되었음을 표시 (DB 업데이트는 마지막에 배치로)
-        articles_to_update_kv_processed.append(new_article['id']) # news_articles 테이블의 ID
-
-    logging.info(f"Processing new articles loop completed in {time.time() - start_processing_new_articles_loop_time:.2f} seconds.")
-
-    # 6. DB 반영 (배치 처리)
-    # 업데이트될 이슈들 반영
-    if updated_issues_for_db:
-        update_statements = []
-        update_params = []
-        for issue_id, data in updated_issues_for_db.items():
-            update_statements.append(f"""
+            updated_issue_id = best_match_id
+            
+            # DB UPDATE 즉시 실행
+            cursor.execute("""
                 UPDATE issues SET
                     issue_name = %s,
                     summary = %s,
@@ -452,35 +428,89 @@ def save_issues_to_db():
                     sentence_embedding = %s,
                     date = %s
                 WHERE id = %s
-            """)
-            update_params.append((data['issue_name'], data['summary'], data['related_news_list'], data['sentence_embedding'], data['date'], issue_id))
-        
-        start_batch_update_time = time.time()
-        for stmt, params in zip(update_statements, update_params): # executemany는 단일 쿼리에만 적용되므로, 여러 쿼리는 개별 실행
-            cursor.execute(stmt, params)
-        logging.info(f"Batch update for {len(updated_issues_for_db)} existing issues took {time.time() - start_batch_update_time:.2f} seconds.")
-        
-    # 새로운 이슈들 삽입
-    if new_issues_for_db:
-        insert_data = []
-        for issue in new_issues_for_db:
-            insert_data.append((issue['date'], issue['issue_name'], issue['summary'], issue['related_news_list'], issue['sentence_embedding']))
-        
-        start_batch_insert_time = time.time()
-        cursor.executemany("""INSERT IGNORE INTO issues (date, issue_name, summary, related_news_list, sentence_embedding) VALUES (%s, %s, %s, %s, %s)""", insert_data)
-        logging.info(f"Batch inserted {cursor.rowcount} new issues in {time.time() - start_batch_insert_time:.2f} seconds.")
-    
-    # kv_int_store 갱신 (처리된 마지막 article ID)
+            """, (new_summary_result['issue_name'], new_summary_result['issue_summary'], 
+                  " ".join(all_merged_article_ids), arr_to_blob(new_issue_embedding_np), 
+                  predict_date(merged_articles_full_data), updated_issue_id))
+            updated_issues_for_db[updated_issue_id] = True # 업데이트된 이슈 ID만 기록 (상태 정보는 필요 없음)
+            
+            # 기존 issues_data 딕셔너리 업데이트 (다음 기사 처리 시 참조할 수 있도록)
+            existing_issues_data[updated_issue_id] = (
+                new_issue_embedding_gpu, # GPU 텐서 업데이트
+                all_merged_article_ids, # related_ids_list 업데이트
+                predict_date(merged_articles_full_data), # date 업데이트
+                new_summary_result['issue_name'] # name 업데이트
+            )
+            
+            # Faiss IndexIDMap에서 기존 벡터 제거 후 새로운 벡터 추가
+            if faiss_index:
+                faiss_index.remove_ids(np.array([updated_issue_id]))
+                faiss_index.add_with_ids(new_issue_embedding_np.astype('float32'), np.array([updated_issue_id]))
+                logging.debug(f"Faiss index updated for issue ID {updated_issue_id}. Faiss ntotal: {faiss_index.ntotal}")
+
+        else:
+            logging.debug(f"Article {new_article['article_id']} created new issue (best sim: {best_sim_score:.4f})")
+            
+            single_article_summary = summarize_and_save([[new_article]])[0] 
+            
+            # 새로운 이슈를 DB에 즉시 삽입하고 ID를 가져옴
+            cursor.execute("""
+                INSERT IGNORE INTO issues (date, issue_name, summary, related_news_list, sentence_embedding) 
+                VALUES (%s, %s, %s, %s, %s)
+            """, (new_article['pub_date'], single_article_summary['issue_name'], 
+                  single_article_summary['issue_summary'], " ".join([new_article['article_id']]), 
+                  arr_to_blob(new_article_emb_np.squeeze(axis=0))))
+            
+            # LAST_INSERT_ID()를 사용하여 방금 삽입된 행의 ID를 가져옵니다.
+            # IGNORE가 있으므로, 이미 존재하는 경우 0을 반환할 수 있습니다.
+            new_issue_id = cursor.lastrowid
+            
+            if new_issue_id and new_issue_id != 0: # 실제로 새로운 행이 삽입된 경우
+                new_issues_count_in_this_run += 1
+                logging.debug(f"New issue created in DB with ID: {new_issue_id}")
+                
+                # 생성된 새 이슈 정보를 existing_issues_data에 추가 (다음 기사 처리 시 참조)
+                existing_issues_data[new_issue_id] = (
+                    new_article_emb_gpu, 
+                    [new_article['article_id']], 
+                    new_article['pub_date'], 
+                    single_article_summary['issue_name']
+                )
+                
+                # Faiss 인덱스에 새로운 벡터 추가
+                if faiss_index:
+                    faiss_index.add_with_ids(new_article_emb_np.astype('float32'), np.array([new_issue_id]))
+                    logging.debug(f"New issue ID {new_issue_id} added to Faiss index. Faiss ntotal: {faiss_index.ntotal}")
+                elif faiss: # Faiss 인덱스가 아직 초기화되지 않았을 경우, 이 시점에서 초기화 시도
+                    # 단, 첫 번째 새 이슈가 이 경로로 오면 Faiss 인덱스 생성 시도를 할 수 있음.
+                    # 임베딩 차원은 이미 `new_article_embeddings_np`에서 가져왔으므로 문제가 없음.
+                    d = new_article_emb_np.shape[1]
+                    quantizer = faiss.IndexFlatIP(d) 
+                    faiss_index = faiss.IndexIDMap(quantizer)
+                    faiss_index.add_with_ids(new_article_emb_np.astype('float32'), np.array([new_issue_id]))
+                    logging.info(f"Faiss IndexIDMap initialized and new issue ID {new_issue_id} added. Faiss ntotal: {faiss_index.ntotal}")
+                else:
+                    logging.warning(f"Faiss not available, new issue ID {new_issue_id} not added to Faiss.")
+            else:
+                logging.warning(f"New issue for article {new_article['article_id']} was not inserted (possibly duplicate or DB error).")
+
+        articles_to_update_kv_processed.append(new_article['id']) 
+
+    logging.info(f"Processing new articles loop completed in {time.time() - start_processing_new_articles_loop_time:.2f} seconds.")
+
+    # 6. DB 반영 (남은 부분 및 kv_int_store 업데이트)
+    # 이미 루프 내에서 이슈 UPDATE/INSERT가 발생했으므로, 여기서 추가적인 배치 처리는 필요 없음.
+    # 하지만, 트랜잭션의 안정성을 위해 커밋은 여기서 한 번만 수행합니다.
+
     if update_kv:
         start_kv_update_time = time.time()
         cursor.execute("""
             REPLACE INTO kv_int_store (name, my_val)
             VALUES (%s, %s);
-        """, ('proceeded', full_count)) # 마지막으로 처리된 article id
+        """, ('proceeded', full_count)) 
         logging.info(f"kv_int_store updated to {full_count} in {time.time() - start_kv_update_time:.2f} seconds.")
 
     start_final_commit_time = time.time()
-    conn.commit()
+    conn.commit() # 모든 변경사항을 한 번에 커밋
     logging.info(f"Final DB commit took {time.time() - start_final_commit_time:.2f} seconds.")
 
     cursor.close()
@@ -490,11 +520,11 @@ def save_issues_to_db():
     
     return jsonify({"status": "success",
                     "used_range": [proceeded, full_count],
-                    "new_issues_created": len(new_issues_for_db),
+                    "new_issues_created": new_issues_count_in_this_run, # 이 실행에서 생성된 새 이슈 수
                     "issues_updated": len(updated_issues_for_db),
                     "total_elapsed_time": f"{total_elapsed:.2f}s"}), 200
 
-@app.route('/')
+# ... (home 라우트 동일) ...@app.route('/')
 def home():
     logging.info("Home route accessed.")
     return "Secured API server is running!"
