@@ -10,3 +10,4 @@ scipy
 numpy
 sentencepiece
 torch_geometric
+faiss-gpu-cu12
