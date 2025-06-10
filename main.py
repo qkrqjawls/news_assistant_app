@@ -233,7 +233,7 @@ def save_issues_to_db():
         'sentence_embedding' : i[3]
     } for i in zip(clustered_data, issue_summary, date_pred, group_rep_vec)]
 
-    # print("clustering and summerization:", issues)
+    print("issuing of new articles is done")
 
     cursor.execute("""SELECT id, sentence_embedding, related_news_list, `date` FROM issues;""")
     existing_issues = cursor.fetchall()
@@ -269,6 +269,7 @@ def save_issues_to_db():
                             WHERE id = %s;""",
                         (got['issue_name'], got['issue_summary'], " ".join(article['article_id'] for article in merged_group), arr_to_blob(new_embedding), sim[0]))
                 issues[idx] = None
+    print("done merging")
 
     for issue in issues:
         if issue:
@@ -281,6 +282,8 @@ def save_issues_to_db():
             REPLACE INTO kv_int_store (name, my_val)
             VALUES (%s, %s);
         """, ('proceeded', full_count))
+
+    print("all done : %d issues are inserted or edited" % len(issues))
 
     conn.commit()
 
