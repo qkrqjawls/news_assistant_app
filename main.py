@@ -12,7 +12,8 @@ DB_USER     = os.environ.get("DB_USER", "appuser")
 DB_PASS     = os.environ.get("DB_PASS", "secure_app_password")
 DB_NAME     = os.environ.get("DB_NAME", "myappdb")
 DB_SOCKET   = os.environ.get("DB_SOCKET")   # ex) "/cloudsql/project:region:instance"
-ISSUE_MERGING_BOUND = 0.8
+ISSUE_MERGING_BOUND = os.environ.get("ISSUE_MERGING_BOUND", 0.8)
+DISTANCE_THRESHOLD = os.environ.get("DISTANCE_THRESHOLD", 0.6)
 
 
 import sys
@@ -208,7 +209,7 @@ def save_issues_to_db():
         conn.close()
         return jsonify({"status":"no_new_articles"}), 200
 
-    clustered_data, group_rep_vec = cluster_items(articles, dist_thresh=0.4)
+    clustered_data, group_rep_vec = cluster_items(articles, dist_thresh=DISTANCE_THRESHOLD)
     issue_summary = summarize_and_save(clustered_data)
     date_pred = [predict_date(i) for i in clustered_data]
 
