@@ -54,7 +54,7 @@ FROM nvidia/cuda:12.3.1-runtime-ubuntu22.04
 
 # 환경 변수 설정 (빌드 스테이지와 동일하게 경로 설정)
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHON_VERSION=3.12
+ENV PYTHON_VERSION=3.10
 ENV PATH="/opt/venv/bin:$PATH"
 
 # 런타임에 필요한 최소한의 시스템 라이브러리 설치
