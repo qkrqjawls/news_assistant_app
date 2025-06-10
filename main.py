@@ -12,8 +12,8 @@ DB_USER     = os.environ.get("DB_USER", "appuser")
 DB_PASS     = os.environ.get("DB_PASS", "secure_app_password")
 DB_NAME     = os.environ.get("DB_NAME", "myappdb")
 DB_SOCKET   = os.environ.get("DB_SOCKET")   # ex) "/cloudsql/project:region:instance"
-ISSUE_MERGING_BOUND = os.environ.get("ISSUE_MERGING_BOUND", 0.8)
-DISTANCE_THRESHOLD = os.environ.get("DISTANCE_THRESHOLD", 0.6)
+ISSUE_MERGING_BOUND = float(os.environ.get("ISSUE_MERGING_BOUND", 0.8))
+DISTANCE_THRESHOLD = float(os.environ.get("DISTANCE_THRESHOLD", 0.6))
 
 
 import sys
