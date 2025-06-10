@@ -249,7 +249,7 @@ def save_issues_to_db():
             # sim = (issue_id, similarity_score, article_ids, embedding_vector, date)
             if sim[1] > ISSUE_MERGING_BOUND and abs(sim[4] - issue['date']) < timedelta(hours=2):
                 """유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장."""
-                merged_group = list(map(id_to_article, set(sim[2] + issue['related_news_list'])))
+                merged_group = list(map(lambda x: id_to_article(x, cursor=cursor), set(sim[2] + issue['related_news_list'])))
                 got_list = summarize_and_save([merged_group])
                 if not got_list or 'issue_name' not in got_list[0]:
                     continue  # 또는 fallback 처리
