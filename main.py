@@ -383,11 +383,11 @@ def save_issues_to_db():
             if all_merged_article_ids:
                 placeholders = ', '.join(['%s'] * len(all_merged_article_ids))
                 cursor.execute(f"""
-                    SELECT article_id, title, content
+                    SELECT article_id, title, content, pub_date
                     FROM news_articles
                     WHERE article_id IN ({placeholders});
                 """, tuple(all_merged_article_ids))
-                cols = ['article_id', 'title', 'content']
+                cols = ['article_id', 'title', 'content', 'pub_date']
                 merged_articles_full_data = [dict(zip(cols, row)) for row in cursor.fetchall()]
             
             new_summary_result = summarize_and_save([merged_articles_full_data])[0] # 결과는 리스트의 첫 번째 요소
