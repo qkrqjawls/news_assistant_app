@@ -430,7 +430,7 @@ def save_issues_to_db():
                 WHERE id = %s
             """, (new_summary_result['issue_name'], new_summary_result['issue_summary'], 
                   " ".join(all_merged_article_ids), arr_to_blob(new_issue_embedding_np), 
-                  predict_date(merged_articles_full_data), updated_issue_id))
+                  predict_date(merged_articles_full_data), int(updated_issue_id)))
             updated_issues_for_db[updated_issue_id] = True # 업데이트된 이슈 ID만 기록 (상태 정보는 필요 없음)
             
             # 기존 issues_data 딕셔너리 업데이트 (다음 기사 처리 시 참조할 수 있도록)
