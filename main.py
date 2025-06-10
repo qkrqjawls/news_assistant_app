@@ -238,6 +238,15 @@ def save_issues_to_db():
                 """
                 유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장.
                 """
+                for idx, i in enumerate(sim[2]):
+                    cursor.execute("""SELECT title, content FROM news_articles WHERE article_id = %s;""", i)
+                    row = cursor.fetchone()
+                    sim[2] = {
+                        "article_id" : i,
+                        "title" : row[0],
+                        "content" : row[1]
+                    }
+                    
                 merged_group = list(set(sim[2] + issue['related_news_list']))
                 got_list = summarize_and_save([merged_group])
                 if not got_list or 'issue_name' not in got_list[0]:
