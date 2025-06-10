@@ -245,9 +245,9 @@ def save_issues_to_db():
         ]
 
         for idx, issue in enumerate(issues):
-            sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec, d) for i,vec,l,d in existing_issues], key=lambda x:x[1])
+            sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec, d) for i,vec,l,d in existing_issues if abs(d - issue['date']) < timedelta(hours=4)], key=lambda x:x[1])
             # sim = (issue_id, similarity_score, article_ids, embedding_vector, date)
-            if sim[1] > ISSUE_MERGING_BOUND and abs(sim[4] - issue['date']) < timedelta(hours=2):
+            if sim[1] > ISSUE_MERGING_BOUND:
                 """유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장."""
                 merged_group = list(map(lambda x: id_to_article(x, cursor=cursor), set(sim[2] + issue['related_news_list'])))
                 got_list = summarize_and_save([merged_group])
