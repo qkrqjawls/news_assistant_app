@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import mysql.connector
 from flask import Flask, request, jsonify
 import numpy as np
@@ -223,30 +223,28 @@ def save_issues_to_db():
 
     print("clustering and summerization:", issues)
 
-    cursor.execute("""SELECT id, sentence_embedding, related_news_list FROM issues;""")
+    cursor.execute("""SELECT id, sentence_embedding, related_news_list, `date` FROM issues;""")
     existing_issues = cursor.fetchall()
     if existing_issues:
         existing_issues = [
-            (i, arr, l.split())
-            for i, vec, l in existing_issues
+            (i, arr, l.split(), d)
+            for i, vec, l, d in existing_issues
             if (arr := load_ndarray(vec)) is not None
         ]
 
         for idx, issue in enumerate(issues):
-            sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec) for i,vec,l in existing_issues], key=lambda x:x[1])
-            if sim[1] > ISSUE_MERGING_BOUND:
-                """
-                유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장.
-                """
+            sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec, d) for i,vec,l,d in existing_issues], key=lambda x:x[1])
+            if sim[1] > ISSUE_MERGING_BOUND and sim[3]-issue['date'] < timedelta(hours=2) and issue['date']-sim[3] < timedelta(hours=2):
+                """유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장."""
                 for idx, i in enumerate(sim[2]):
-                    cursor.execute("""SELECT title, content FROM news_articles WHERE article_id = %s;""", i)
+                    cursor.execute("""SELECT title, content FROM news_articles WHERE article_id = %s;""", (i,))
                     row = cursor.fetchone()
                     sim[2] = {
                         "article_id" : i,
                         "title" : row[0],
                         "content" : row[1]
                     }
-                    
+
                 merged_group = list(set(sim[2] + issue['related_news_list']))
                 got_list = summarize_and_save([merged_group])
                 if not got_list or 'issue_name' not in got_list[0]:
