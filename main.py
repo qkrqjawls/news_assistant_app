@@ -107,12 +107,14 @@ def save_news_to_db():
                 serialize(article.get("category")),
                 article.get("duplicate"),
             ))
-            print(f"(✓) Inserted article_id={article['article_id']}")
+            # print(f"(✓) Inserted article_id={article['article_id']}")
         except Exception as e:
             print("(!) Insert failed:", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
     
     conn.commit()
+
+    print("Inserted %d articles" % len(data))
 
     cursor.close()
     conn.close()
@@ -231,7 +233,7 @@ def save_issues_to_db():
         'sentence_embedding' : i[3]
     } for i in zip(clustered_data, issue_summary, date_pred, group_rep_vec)]
 
-    print("clustering and summerization:", issues)
+    # print("clustering and summerization:", issues)
 
     cursor.execute("""SELECT id, sentence_embedding, related_news_list, `date` FROM issues;""")
     existing_issues = cursor.fetchall()
@@ -244,7 +246,8 @@ def save_issues_to_db():
 
         for idx, issue in enumerate(issues):
             sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec, d) for i,vec,l,d in existing_issues], key=lambda x:x[1])
-            if sim[1] > ISSUE_MERGING_BOUND and abs(sim[3] - issue['date']) < timedelta(hours=2):
+            # sim = (issue_id, similarity_score, article_ids, embedding_vector, date)
+            if sim[1] > ISSUE_MERGING_BOUND and abs(sim[4] - issue['date']) < timedelta(hours=2):
                 """유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장."""
                 merged_group = list(map(id_to_article, set(sim[2] + issue['related_news_list'])))
                 got_list = summarize_and_save([merged_group])
