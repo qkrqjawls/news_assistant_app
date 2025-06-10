@@ -151,6 +151,16 @@ def my_cosine_similarity(vec1 : np.ndarray, vec2 : np.ndarray): # 1D cosine sim
         vec2.reshape(1, -1)
     )[0, 0]
 
+def id_to_article(article_id : str, cursor):
+    cursor.execute("""SELECT title, content FROM news_articles WHERE article_id = %s;""", (article_id,))
+    row = cursor.fetchone()
+    if not row:
+        return {"article_id": article_id, "title": "", "content": ""}
+    return {
+        "article_id" : article_id,
+        "title" : row[0],
+        "content" : row[1]
+    }
 
 
 @app.route('/save-issues', methods=['POST'])
@@ -234,18 +244,9 @@ def save_issues_to_db():
 
         for idx, issue in enumerate(issues):
             sim = max([(i, my_cosine_similarity(issue['sentence_embedding'], vec), l, vec, d) for i,vec,l,d in existing_issues], key=lambda x:x[1])
-            if sim[1] > ISSUE_MERGING_BOUND and sim[3]-issue['date'] < timedelta(hours=2) and issue['date']-sim[3] < timedelta(hours=2):
+            if sim[1] > ISSUE_MERGING_BOUND and abs(sim[3] - issue['date']) < timedelta(hours=2):
                 """유사한 이슈 발견 시 처리 -> 병합된 군집에 대한 새로운 요약 생성, 기존 id에 덮어써서 저장."""
-                for idx, i in enumerate(sim[2]):
-                    cursor.execute("""SELECT title, content FROM news_articles WHERE article_id = %s;""", (i,))
-                    row = cursor.fetchone()
-                    sim[2] = {
-                        "article_id" : i,
-                        "title" : row[0],
-                        "content" : row[1]
-                    }
-
-                merged_group = list(set(sim[2] + issue['related_news_list']))
+                merged_group = list(map(id_to_article, set(sim[2] + issue['related_news_list'])))
                 got_list = summarize_and_save([merged_group])
                 if not got_list or 'issue_name' not in got_list[0]:
                     continue  # 또는 fallback 처리
@@ -256,14 +257,14 @@ def save_issues_to_db():
                 if len_a + len_b == 0:
                     continue  # 또는 예외 처리
                 new_embedding = (sim[3]*len_a + issue['sentence_embedding']*len_b) / (len_a + len_b)
-                
+
                 cursor.execute("""UPDATE issues SET
                             issue_name    = %s,
                             summary           = %s,
                             related_news_list = %s,
                             sentence_embedding= %s
                             WHERE id = %s;""",
-                        (got['issue_name'], got['issue_summary'], " ".join(merged_group), arr_to_blob(new_embedding), sim[0]))
+                        (got['issue_name'], got['issue_summary'], " ".join(article['article_id'] for article in merged_group), arr_to_blob(new_embedding), sim[0]))
                 issues[idx] = None
 
     for issue in issues:
