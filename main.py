@@ -126,7 +126,7 @@ def save_news_to_db():
     return jsonify({"status": "success", "number_of_articles" : len(data)}), 200
 
 
-FOUR_HOURS = timedelta(hours=4)
+ONE_DAY = timedelta(hours=12)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 CATEGORY_TO_INDEX = {
     "politics": 0,
@@ -170,9 +170,14 @@ def arr_to_blob(arr: np.ndarray) -> bytes:
 
 def load_ndarray(blob: bytes) -> np.ndarray:
     if not blob:
+        return None # 빈 blob일 경우 None 반환
+    try:
+        buf = io.BytesIO(blob)
+        return np.load(buf, allow_pickle=False)
+    except Exception as e:
+        print(f"(!) Failed to load ndarray from blob: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return None
-    buf = io.BytesIO(blob)
-    return np.load(buf, allow_pickle=False)
 
 
 @app.route('/save-issues', methods=['POST'])
@@ -266,8 +271,8 @@ def save_issues_to_db():
 
         # 4) 날짜 필터
         valid_dates = [i['date'] for i in issues if i['date']]
-        min_date = min(valid_dates) - FOUR_HOURS
-        max_date = max(valid_dates) + FOUR_HOURS
+        min_date = min(valid_dates) - ONE_DAY
+        max_date = max(valid_dates) + ONE_DAY
 
         # 5) 기존 이슈 로드
         cursor.execute(
@@ -281,7 +286,7 @@ def save_issues_to_db():
         for eid, blob, rel_str, pub_date in cursor.fetchall():
             arr = load_ndarray(blob)
             if arr is not None:
-                existing.append((eid, torch.from_numpy(arr).to(device), json.loads(rel_str), pub_date))
+                existing.append((eid, torch.from_numpy(arr).to(device), rel_str.split(), pub_date))
 
         # 6) 배치 유사도 & 병합
         new_tensors = [torch.from_numpy(i['sentence_embedding']).to(device) for i in issues]
@@ -297,7 +302,7 @@ def save_issues_to_db():
                 score = max_scores[idx].item()
                 best = max_idxs[idx].item()
                 eid, old_rel, old_date = exist_meta[best]
-                if score > ISSUE_MERGING_BOUND and abs(old_date - issue['date']) < FOUR_HOURS:
+                if score > ISSUE_MERGING_BOUND and abs(old_date - issue['date']) < ONE_DAY:
                     # 병합 대상 ID 리스트
                     merged_ids = list(set(old_rel + issue['related_news_list']))
 
