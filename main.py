@@ -6,6 +6,9 @@ import numpy as np
 import io
 import torch
 import torch.nn.functional as F
+from news_issuing.embedding_and_cluster import cluster_items
+from news_issuing.summarize_issues import summarize_and_save
+import json
 
 app = Flask(__name__)
 
@@ -122,38 +125,9 @@ def save_news_to_db():
     conn.close()
     return jsonify({"status": "success", "number_of_articles" : len(data)}), 200
 
-from news_issuing.embedding_and_cluster import cluster_items
-from news_issuing.summarize_issues import summarize_and_save
-import json
-import io
-import torch
-import torch.nn.functional as F
-from datetime import datetime, timezone, timedelta
-from flask import Flask, request, jsonify
-import mysql.connector
-import numpy as np
 
-app = Flask(__name__)
-
-# 환경변수 및 상수
-DB_USER = os.environ.get("DB_USER", "appuser")
-DB_PASS = os.environ.get("DB_PASS", "secure_app_password")
-DB_NAME = os.environ.get("DB_NAME", "myappdb")
-DB_SOCKET = os.environ.get("DB_SOCKET")  # ex: "/cloudsql/proj:region:inst"
-ISSUE_MERGING_BOUND = float(os.environ.get("ISSUE_MERGING_BOUND", 0.8))
-DISTANCE_THRESHOLD = float(os.environ.get("DISTANCE_THRESHOLD", 0.6))
 FOUR_HOURS = timedelta(hours=4)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# 유틸리티
-
-def get_db_connection():
-    if DB_SOCKET:
-        return mysql.connector.connect(user=DB_USER, password=DB_PASS,
-                                       database=DB_NAME, unix_socket=DB_SOCKET)
-    return mysql.connector.connect(user=DB_USER, password=DB_PASS,
-                                   database=DB_NAME, host='127.0.0.1', port=3306)
-
 
 def predict_date(articles):
     dates = sorted(a['pub_date'] for a in articles)
