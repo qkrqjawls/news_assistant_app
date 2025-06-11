@@ -128,6 +128,34 @@ def save_news_to_db():
 
 FOUR_HOURS = timedelta(hours=4)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+CATEGORY_TO_INDEX = {
+    "politics": 0,
+    "business": 1,
+    "entertainment": 2,
+    "environment": 3,
+    "food": 4,
+    "health": 5,
+    "science": 6,
+    "sports": 7,
+    "technology": 8,
+    "top": 9,
+    "world": 10,
+    "tourism": 11
+}
+import numpy as np
+
+def encode_category_mask(categories: list[str]) -> np.ndarray:
+    """
+    카테고리 문자열 리스트를 입력 받아
+    12차원 멀티핫 인코딩된 마스크 벡터를 반환
+    """
+    mask = np.zeros(len(CATEGORY_TO_INDEX), dtype=int)
+    for cat in categories:
+        idx = CATEGORY_TO_INDEX.get(cat)
+        if idx is not None:
+            mask[idx] = 1
+    return mask
+
 
 def predict_date(articles):
     dates = sorted(a['pub_date'] for a in articles)
@@ -195,14 +223,46 @@ def save_issues_to_db():
         clustered_data, group_reprs = cluster_items(articles, dist_thresh=DISTANCE_THRESHOLD)
         summaries = summarize_and_save(clustered_data)
         issues = []
-        for group, summary, _date, repr_vec in zip(clustered_data, summaries, map(predict_date, clustered_data), group_reprs):
+        for group, summary, _date, repr_vec in zip(
+                clustered_data,
+                summaries,
+                map(predict_date, clustered_data),
+                group_reprs
+            ):
+            # 1) article_id 리스트
+            article_ids = [a['article_id'] for a in group]
+
+            # 2) 관련 기사들의 category JSON 문자열 조회
+            if article_ids:
+                ph = ','.join(['%s'] * len(article_ids))
+                cursor.execute(
+                    f"SELECT category FROM news_articles WHERE article_id IN ({ph})",
+                    tuple(article_ids)
+                )
+                raw = cursor.fetchall()
+                cats = []
+                for (cat_blob,) in raw:
+                    try:
+                        cats.extend(json.loads(cat_blob))
+                    except json.JSONDecodeError:
+                        cats.append(cat_blob)
+                cats = list(set(cats))
+                # 3) 멀티핫 마스크 생성
+                category_vec = encode_category_mask(cats)
+            else:
+                # 기사 없으면 전부 0
+                category_vec = np.zeros(len(CATEGORY_TO_INDEX), dtype=int)
+
+            # 4) issues에 추가
             issues.append({
                 'date': _date,
                 'issue_name': summary['issue_name'],
                 'summary': summary['issue_summary'],
-                'related_news_list': [a['article_id'] for a in group],
-                'sentence_embedding': repr_vec
+                'related_news_list': article_ids,
+                'sentence_embedding': repr_vec,
+                'category_vec': category_vec,   # ← 여기!
             })
+
 
         # 4) 날짜 필터
         valid_dates = [i['date'] for i in issues if i['date']]
@@ -225,6 +285,7 @@ def save_issues_to_db():
 
         # 6) 배치 유사도 & 병합
         new_tensors = [torch.from_numpy(i['sentence_embedding']).to(device) for i in issues]
+        cnt = 0
         if existing and new_tensors:
             exist_tensors, exist_meta = zip(*[ (emb, (eid, rel, dt)) for eid, emb, rel, dt in existing ])
             new_embs = torch.stack(new_tensors)
@@ -237,32 +298,66 @@ def save_issues_to_db():
                 best = max_idxs[idx].item()
                 eid, old_rel, old_date = exist_meta[best]
                 if score > ISSUE_MERGING_BOUND and abs(old_date - issue['date']) < FOUR_HOURS:
-                    # 병합 대상
+                    # 병합 대상 ID 리스트
                     merged_ids = list(set(old_rel + issue['related_news_list']))
-                    # 병합 그룹 기사 가져오기
+
+                    # (1) 병합 그룹 기사 가져오기 (category 포함)
                     ph = ','.join(['%s'] * len(merged_ids))
-                    cursor.execute(f"SELECT article_id,title,content FROM news_articles WHERE article_id IN ({ph})", tuple(merged_ids))
-                    merged_group = [dict(zip(['article_id','title','content'], r)) for r in cursor.fetchall()]
+                    cursor.execute(
+                        f"SELECT article_id, title, content, category "
+                        f"FROM news_articles WHERE article_id IN ({ph})",
+                        tuple(merged_ids)
+                    )
+                    merged_rows = cursor.fetchall()  # list of tuples
+
+                    # (2) 요약 생성
+                    merged_group = [
+                        dict(zip(['article_id','title','content','category'], row))
+                        for row in merged_rows
+                    ]
                     summary = summarize_and_save([merged_group])[0]
-                    # 임베딩 평균
+
+                    # (3) 임베딩 평균
                     old_emb = exist_tensors[best]
                     new_emb = new_tensors[idx]
                     na, nb = len(old_rel), len(issue['related_news_list'])
-                    merged_emb = (old_emb*na + new_emb*nb) / (na+nb)
-                    # DB 업데이트
+                    merged_emb = (old_emb * na + new_emb * nb) / (na + nb)
+
+                    # (4) 병합된 카테고리 리스트 추출 & 멀티핫 인코딩
+                    cats_all = []
+                    for _, _, _, cat_blob in merged_rows:
+                        try:
+                            cats_all.extend(json.loads(cat_blob))
+                        except json.JSONDecodeError:
+                            cats_all.append(cat_blob)
+                    cats_all = list(set(cats_all))
+                    merged_mask = encode_category_mask(cats_all)
+
+                    # (5) DB 업데이트 (category_vec 추가)
                     cursor.execute(
                         """
                         UPDATE issues SET
-                          issue_name=%s, summary=%s,
-                          related_news_list=%s, sentence_embedding=%s
-                         WHERE id=%s
+                          issue_name        = %s,
+                          summary           = %s,
+                          related_news_list = %s,
+                          sentence_embedding= %s,
+                          category_vec      = %s
+                        WHERE id = %s
                         """,
                         (
-                            summary['issue_name'], summary['issue_summary'],
-                            json.dumps(merged_ids), arr_to_blob(merged_emb.cpu().numpy()), eid
+                            summary['issue_name'],
+                            summary['issue_summary'],
+                            json.dumps(merged_ids),
+                            arr_to_blob(merged_emb.cpu().numpy()),
+                            arr_to_blob(merged_mask),
+                            eid
                         )
                     )
+                    # 해당 인덱스는 신규 삽입에서 제외
                     issues[idx] = None
+                    cnt += 1
+        conn.commit()
+        print(f"병합 완료: done merging: {cnt} issues merged")
 
         # 7) 신규 이슈 삽입
         for issue in issues:
@@ -270,14 +365,27 @@ def save_issues_to_db():
                 cursor.execute(
                     """
                     INSERT IGNORE INTO issues
-                      (date, issue_name, summary, related_news_list, sentence_embedding)
-                    VALUES (%s, %s, %s, %s, %s)
+                      (date,
+                       issue_name,
+                       summary,
+                       related_news_list,
+                       sentence_embedding,
+                       category_vec)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        issue['date'], issue['issue_name'], issue['summary'],
-                        json.dumps(issue['related_news_list']), arr_to_blob(issue['sentence_embedding'])
+                        issue['date'],
+                        issue['issue_name'],
+                        issue['summary'],
+                        json.dumps(issue['related_news_list']),
+                        arr_to_blob(issue['sentence_embedding']),
+                        arr_to_blob(issue['category_vec'])   # ← 추가된 부분
                     )
                 )
+        conn.commit()
+
+        print(f"이슈 추가 완료: {len(issues)} issues")
+
 
         # 8) KV 갱신
         if update_kv:
