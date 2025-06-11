@@ -443,8 +443,9 @@ def save_issues_to_db():
             
             # Faiss IndexIDMap에서 기존 벡터 제거 후 새로운 벡터 추가
             if faiss_index:
+                new_issue_embedding_np_2d = new_issue_embedding_np.reshape(1, -1)
                 faiss_index.remove_ids(np.array([updated_issue_id]))
-                faiss_index.add_with_ids(new_issue_embedding_np.astype('float32'), np.array([updated_issue_id]))
+                faiss_index.add_with_ids(new_issue_embedding_np_2d.astype('float32'), np.array([updated_issue_id]))
                 logging.debug(f"Faiss index updated for issue ID {updated_issue_id}. Faiss ntotal: {faiss_index.ntotal}")
 
         else:
