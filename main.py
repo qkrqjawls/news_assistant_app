@@ -370,22 +370,38 @@ def save_issues_to_db():
             # D: 유사도 점수, I: 해당 벡터의 ID (우리의 issue_id)
             D, I = faiss_index.search(new_article_emb_np, k) 
             
+            # 변경 제안: 유사도 점수 로깅 강화
             for j in range(k):
-                matched_issue_id = I[0][j]
+                matched_issue_id = int(I[0][j]) 
                 sim_score = D[0][j]
                 
-                # matched_issue_id != -1는 Faiss가 유효한 매치를 찾았음을 의미
-                # matched_issue_id in existing_issues_data는 Faiss가 반환한 ID가
-                # 현재 메모리에 로드된 기존 이슈 데이터에 실제로 존재하는지 확인 (만약 DB에만 있고 메모리에 없는 경우 방지)
+                # 디버깅을 위해 매치된 이슈와 점수를 항상 로깅
+                logging.debug(f"Article {new_article['article_id']} -> Matched Faiss ID: {matched_issue_id}, Sim Score: {sim_score:.4f}")
+
                 if matched_issue_id != -1 and matched_issue_id in existing_issues_data: 
                     matched_issue_info = existing_issues_data[matched_issue_id]
                     
-                    # 날짜 필터링 (4시간 이내)
-                    if abs(matched_issue_info[2] - new_article['pub_date']) < FOUR_HOURS: 
+                    # 날짜 차이도 로깅하여 문제 파악
+                    date_diff = abs(matched_issue_info[2] - new_article['pub_date'])
+                    logging.debug(f"Article {new_article['article_id']} -> Date diff with issue {matched_issue_id}: {date_diff} (threshold: {FOUR_HOURS})")
+
+                    if date_diff < FOUR_HOURS: # 날짜 조건 통과
                         if sim_score > best_sim_score:
                             best_sim_score = sim_score
                             best_match_id = matched_issue_id
                             best_match_info = matched_issue_info 
+                        # 디버깅을 위해 best_sim_score가 업데이트될 때 로깅
+                        logging.debug(f"Article {new_article['article_id']} -> Best match updated to issue {best_match_id} (sim: {best_sim_score:.4f})")
+                    else:
+                        logging.debug(f"Article {new_article['article_id']} -> Issue {matched_issue_id} skipped due to date difference.")
+                else:
+                    logging.debug(f"Article {new_article['article_id']} -> Matched ID {matched_issue_id} not valid or not in existing_issues_data.")
+
+            # 이 부분도 중요: 왜 병합이 안 되는지 명확히 로깅
+            if best_match_id and best_sim_score > ISSUE_MERGING_BOUND:
+                logging.debug(f"Article {new_article['article_id']} matched with existing issue {best_match_id} (sim: {best_sim_score:.4f}) - Merging initiated.")
+            else:
+                logging.debug(f"Article {new_article['article_id']} created new issue (best sim: {best_sim_score:.4f} < {ISSUE_MERGING_BOUND} or no match) - New issue initiated.")
 
         # 5. 병합 또는 신규 이슈 생성
         if best_match_id and best_sim_score > ISSUE_MERGING_BOUND:
