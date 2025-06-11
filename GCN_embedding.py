@@ -7,7 +7,7 @@ import numpy as np
 import random
 
 
-def user_item_GCN_embedding(user_ids : list, item_ids : list, raw_edges : list): # (user id->vec 딕셔너리, item id->vec 딕셔너리) 튜플
+def user_item_GCN_embedding(user_ids : list, item_ids : list, raw_edges : list): # return (user id->vec(ndarray) 딕셔너리, item id->vec 딕셔너리) 튜플
     user_encoder = LabelEncoder()
     item_encoder = LabelEncoder()
 
