@@ -233,10 +233,14 @@ def save_issues_to_db():
         'sentence_embedding' : i[3] # group_rep_vec (numpy array)
     } for i in zip(clustered_data, issue_summary, date_pred, group_rep_vec)]
 
+    dates = [i['date'] for i in issues]
+    min_date = min(dates) - FOUR_HOURS
+    max_date = max(dates) + FOUR_HOURS
+
     print("issuing of new articles is done")
 
     # 기존 이슈 로딩 및 GPU로 임베딩 이동
-    cursor.execute("""SELECT id, sentence_embedding, related_news_list, `date` FROM issues;""")
+    cursor.execute("""SELECT id, sentence_embedding, related_news_list, `date` FROM issues WHERE `date` > %s AND `date` < %s;""", min_date, max_date)
     existing_issues_raw = cursor.fetchall()
 
     existing_issues_gpu = []
