@@ -347,7 +347,7 @@ def save_issues_to_db():
                         (
                             summary['issue_name'],
                             summary['issue_summary'],
-                            json.dumps(merged_ids),
+                            " ".join(map(str, merged_ids)),
                             arr_to_blob(merged_emb.cpu().numpy()),
                             arr_to_blob(merged_mask),
                             eid
@@ -377,7 +377,7 @@ def save_issues_to_db():
                         issue['date'],
                         issue['issue_name'],
                         issue['summary'],
-                        json.dumps(issue['related_news_list']),
+                        " ".join(map(str, issue['related_news_list'])),
                         arr_to_blob(issue['sentence_embedding']),
                         arr_to_blob(issue['category_vec'])   # ← 추가된 부분
                     )
