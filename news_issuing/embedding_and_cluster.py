@@ -59,6 +59,8 @@ def cluster_items(items: list, dist_thresh=0.6):
     # compute_embeddings는 이제 numpy.ndarray를 반환합니다.
     embeddings = compute_embeddings(items)
 
+    print(f"임베딩 완료: embedded {len(embeddings)} of articles")
+
     # 2) 클러스터링 (sklearn.cluster.AgglomerativeClustering은 CPU에서 동작)
     # 'metric="cosine"'은 코사인 거리를 사용하며, 0에 가까울수록 유사하고 1에 가까울수록 비유사합니다.
     # 따라서 distance_threshold는 거리가 이 값보다 작을 때 병합됩니다.
@@ -72,6 +74,8 @@ def cluster_items(items: list, dist_thresh=0.6):
 
     # 3) 군집별 결과 매핑 및 대표 벡터 계산
     n_clusters = max(labels) + 1 if labels.size > 0 else 0 # 빈 경우 처리
+
+    print(f"클러스터링 완료: got {n_clusters} of clusters from {len(embeddings)} articles")
 
     results = [[] for _ in range(n_clusters)]
     group_rep_vec = []

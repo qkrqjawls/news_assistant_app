@@ -42,7 +42,7 @@ def summarize_with_openai(cluster_texts: list[str]) -> dict:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "gpt-4o",
+                "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 512,
                 "temperature": 0.7
