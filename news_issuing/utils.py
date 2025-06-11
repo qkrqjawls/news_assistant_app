@@ -5,9 +5,7 @@ import json
 import re
 import requests
 
-
-# .env 혹은 셸 환경변수에서 CHAT_GPT_API_KEY를 읽어옵니다.
-
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-3.5-turbo")
 CHAT_GPT_API_KEY = os.environ.get("CHAT_GPT_API_KEY", "appuser")
 
 def load_all_json_from_folder(folder_path: str) -> list[dict]:
@@ -42,7 +40,7 @@ def summarize_with_openai(cluster_texts: list[str]) -> dict:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "gpt-3.5-turbo",
+                "model": GPT_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 512,
                 "temperature": 0.7
